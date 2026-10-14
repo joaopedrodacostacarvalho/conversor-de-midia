@@ -12,9 +12,29 @@
   button { background:#2563eb; color:#fff; border:none; cursor:pointer; margin-top:20px; font-weight:600; }
   button:hover { background:#1e40af; }
   button:disabled { background:#93c5fd; cursor:not-allowed; }
-  #status { margin-top:20px; padding:14px; background:#f3f4f6; border-radius:6px; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:14px; }
-  .ok { color:#15803d; } .err { color:#b91c1c; }
-  a { color:#2563eb; }
+
+  #status {
+    margin-top:20px; padding:14px; background:#f3f4f6; border-radius:6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:14px;
+    display: none; white-space: pre-wrap; word-break: break-all;
+  }
+  #status.visible { display: block; }
+  #status.ok   { background:#dcfce7; color:#14532d; }
+  #status.err  { background:#fee2e2; color:#7f1d1d; }
+
+  .row { display:flex; gap:8px; align-items:baseline; margin-top:6px; }
+  .row .label { flex:0 0 60px; color:#6b7280; }
+  .row .value { flex:1; }
+
+  a.download {
+    display:inline-flex; align-items:center; gap:6px;
+    color:#1d4ed8; font-weight:600; text-decoration:none;
+    border-bottom:1px dashed #1d4ed8; padding-bottom:1px;
+  }
+  a.download:hover { color:#1e3a8a; border-bottom-style:solid; }
+  a.download::before { content:"⬇"; font-size:1.1em; }
+
+  .small { font-size:12px; color:#6b7280; margin-top:8px; }
 </style>
 </head>
 <body>
@@ -31,7 +51,8 @@
 
   <button type="submit" id="btn">Enviar</button>
 </form>
-<div id="status" hidden></div>
+
+<div id="status"></div>
 
 <script>
 const EXT_TO_TYPE = {
@@ -48,6 +69,7 @@ const FORMATS = {
 const $ = (id) => document.getElementById(id);
 const fileInput = $("file");
 const targetSel = $("targetFormat");
+const statusBox = $("status");
 
 fileInput.addEventListener("change", () => {
   const name = fileInput.files[0]?.name || "";
@@ -65,15 +87,59 @@ fileInput.addEventListener("change", () => {
   }
 });
 
+/**
+ * Helpers de render seguro via DOM (nunca usa innerHTML com dados do servidor).
+ */
+function el(tag, attrs = {}, text) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else node.setAttribute(k, v);
+  }
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function renderRow(label, valueNode) {
+  const row = el("div", { class: "row" });
+  row.appendChild(el("span", { class: "label" }, label));
+  const val = el("span", { class: "value" });
+  if (typeof valueNode === "string") val.textContent = valueNode;
+  else val.appendChild(valueNode);
+  row.appendChild(val);
+  return row;
+}
+
+function safeUrl(url) {
+  try {
+    const u = new URL(url, window.location.origin);
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.href : "#";
+  } catch { return "#"; }
+}
+
+function renderLink(url) {
+  return el("a", {
+    class: "download",
+    href: safeUrl(url),
+    target: "_blank",
+    rel: "noopener noreferrer",
+  }, "Abrir arquivo convertido");
+}
+
+function setStatus(children, variant) {
+  statusBox.innerHTML = "";
+  statusBox.classList.add("visible");
+  statusBox.classList.remove("ok", "err");
+  if (variant) statusBox.classList.add(variant);
+  for (const c of children) statusBox.appendChild(c);
+}
+
 let timer = null;
 
 $("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("btn").disabled = true;
-  const status = $("status");
-  status.hidden = false;
-  status.textContent = "Enviando...";
-  status.className = "";
+  setStatus([el("div", {}, "Enviando...")]);
 
   const fd = new FormData();
   fd.append("file", fileInput.files[0]);
@@ -84,29 +150,56 @@ $("form").addEventListener("submit", async (e) => {
     const res = await fetch("/jobs", { method: "POST", body: fd });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      status.textContent = "Erro: " + (err.detail || JSON.stringify(err));
-      status.className = "err";
+      setStatus([
+        renderRow("Erro", String(err.detail || JSON.stringify(err))),
+      ], "err");
       $("btn").disabled = false;
       return;
     }
+
     const { jobId } = await res.json();
-    status.textContent = `Job enviado!\njobId: ${jobId}\nAguardando processamento...`;
+
+    setStatus([
+      renderRow("jobId", jobId),
+      renderRow("status", "PENDENTE — aguardando processamento..."),
+    ]);
 
     if (timer) clearInterval(timer);
     timer = setInterval(async () => {
       const r = await fetch(`/jobs/${jobId}`);
       if (!r.ok) return;
       const j = await r.json();
-      let text = `jobId:  ${j.jobId}\nstatus: ${j.status}`;
-      if (j.convertedUrl) text += `\nlink:   ${j.convertedUrl}`;
-      if (j.errorMessage) text += `\nerro:   ${j.errorMessage}`;
-      status.textContent = text;
-      if (j.status === "CONCLUIDO") { status.className = "ok"; clearInterval(timer); $("btn").disabled = false; }
-      if (j.status === "ERRO")      { status.className = "err"; clearInterval(timer); $("btn").disabled = false; }
+
+      const rows = [
+        renderRow("jobId", j.jobId),
+        renderRow("status", j.status),
+      ];
+
+      if (j.status === "CONCLUIDO" && j.convertedUrl) {
+        // Link real, clicável, com feedback textual do destino
+        rows.push(renderRow("download", renderLink(j.convertedUrl)));
+        rows.push(el("div", { class: "small" },
+          `URL: ${j.convertedUrl}`));
+      }
+
+      if (j.errorMessage) {
+        rows.push(renderRow("erro", j.errorMessage));
+      }
+
+      const variant =
+        j.status === "CONCLUIDO" ? "ok" :
+        j.status === "ERRO"      ? "err" : null;
+
+      setStatus(rows, variant);
+
+      if (j.status === "CONCLUIDO" || j.status === "ERRO") {
+        clearInterval(timer);
+        $("btn").disabled = false;
+      }
     }, 2000);
+
   } catch (err) {
-    status.textContent = "Falha: " + err.message;
-    status.className = "err";
+    setStatus([renderRow("Falha", err.message)], "err");
     $("btn").disabled = false;
   }
 });
