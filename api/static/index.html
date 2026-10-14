@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conversor de Mídia</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color:#111; }
+  h1 { margin-bottom: 24px; }
+  label { display:block; margin-top:14px; font-weight:600; }
+  input, select, button { width:100%; padding:10px; margin-top:6px; box-sizing:border-box; border:1px solid #ccc; border-radius:6px; font-size:15px; }
+  button { background:#2563eb; color:#fff; border:none; cursor:pointer; margin-top:20px; font-weight:600; }
+  button:hover { background:#1e40af; }
+  button:disabled { background:#93c5fd; cursor:not-allowed; }
+  #status { margin-top:20px; padding:14px; background:#f3f4f6; border-radius:6px; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:14px; }
+  .ok { color:#15803d; } .err { color:#b91c1c; }
+  a { color:#2563eb; }
+</style>
+</head>
+<body>
+<h1>Conversor de Mídia</h1>
+<form id="form">
+  <label>Arquivo (vídeo, áudio ou imagem)</label>
+  <input type="file" id="file" required>
+
+  <label>Formato destino</label>
+  <select id="targetFormat" required></select>
+
+  <label>E-mail para notificação</label>
+  <input type="email" id="email" required placeholder="voce@exemplo.com">
+
+  <button type="submit" id="btn">Enviar</button>
+</form>
+<div id="status" hidden></div>
+
+<script>
+const EXT_TO_TYPE = {
+  mp4:"video", avi:"video", mkv:"video", mov:"video", webm:"video",
+  mp3:"audio", wav:"audio", ogg:"audio", flac:"audio", aac:"audio", m4a:"audio",
+  png:"image", jpg:"image", jpeg:"image", webp:"image", gif:"image", bmp:"image", tiff:"image",
+};
+const FORMATS = {
+  video: ["mp4","avi","mkv","mov","webm"],
+  audio: ["mp3","wav","ogg","flac","aac","m4a"],
+  image: ["png","jpg","webp","gif","bmp"],
+};
+
+const $ = (id) => document.getElementById(id);
+const fileInput = $("file");
+const targetSel = $("targetFormat");
+
+fileInput.addEventListener("change", () => {
+  const name = fileInput.files[0]?.name || "";
+  const ext = name.split(".").pop().toLowerCase();
+  const type = EXT_TO_TYPE[ext];
+  targetSel.innerHTML = "";
+  if (!type) {
+    targetSel.innerHTML = '<option value="">-- extensão não suportada --</option>';
+    return;
+  }
+  for (const f of FORMATS[type].filter(x => x !== ext)) {
+    const o = document.createElement("option");
+    o.value = f; o.textContent = f.toUpperCase();
+    targetSel.appendChild(o);
+  }
+});
+
+let timer = null;
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("btn").disabled = true;
+  const status = $("status");
+  status.hidden = false;
+  status.textContent = "Enviando...";
+  status.className = "";
+
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+  fd.append("targetFormat", targetSel.value);
+  fd.append("email", $("email").value);
+
+  try {
+    const res = await fetch("/jobs", { method: "POST", body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      status.textContent = "Erro: " + (err.detail || JSON.stringify(err));
+      status.className = "err";
+      $("btn").disabled = false;
+      return;
+    }
+    const { jobId } = await res.json();
+    status.textContent = `Job enviado!\njobId: ${jobId}\nAguardando processamento...`;
+
+    if (timer) clearInterval(timer);
+    timer = setInterval(async () => {
+      const r = await fetch(`/jobs/${jobId}`);
+      if (!r.ok) return;
+      const j = await r.json();
+      let text = `jobId:  ${j.jobId}\nstatus: ${j.status}`;
+      if (j.convertedUrl) text += `\nlink:   ${j.convertedUrl}`;
+      if (j.errorMessage) text += `\nerro:   ${j.errorMessage}`;
+      status.textContent = text;
+      if (j.status === "CONCLUIDO") { status.className = "ok"; clearInterval(timer); $("btn").disabled = false; }
+      if (j.status === "ERRO")      { status.className = "err"; clearInterval(timer); $("btn").disabled = false; }
+    }, 2000);
+  } catch (err) {
+    status.textContent = "Falha: " + err.message;
+    status.className = "err";
+    $("btn").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
