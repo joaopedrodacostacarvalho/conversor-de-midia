@@ -3,7 +3,6 @@ import os
 import subprocess
 import tempfile
 import time
-from datetime import timedelta
 
 import pika
 from minio import Minio
@@ -43,7 +42,6 @@ def _build_minio(endpoint: str) -> Minio:
 
 
 internal_minio = _build_minio(MINIO_ENDPOINT)
-public_minio = _build_minio(MINIO_PUBLIC_ENDPOINT)
 
 
 # ------------------------- helpers -------------------------
@@ -86,7 +84,8 @@ def convert_media(src: str, dst: str, source_type: str, target_format: str) -> N
         )
     elif source_type == "image":
         img = Image.open(src)
-        fmt = "JPEG" if target_format in ("jpg", "jpeg") else target_format.upper()
+        fmt = "JPEG" if target_format in (
+            "jpg", "jpeg") else target_format.upper()
         if fmt == "JPEG" and img.mode in ("RGBA", "P", "LA"):
             img = img.convert("RGB")
         img.save(dst, format=fmt)
@@ -155,7 +154,8 @@ def process_message(ch, method, _properties, body):
         # Idempotência: se já concluído, ignora
         status = get_job_status(job_id)
         if status == "CONCLUIDO":
-            print(f"[worker] job={job_id} já concluído — ignorando", flush=True)
+            print(f"[worker] job={
+                  job_id} já concluído — ignorando", flush=True)
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
@@ -176,10 +176,9 @@ def process_message(ch, method, _properties, body):
             out_key = f"{job_id}/converted.{msg['targetFormat']}"
             internal_minio.fput_object(CONVERTED_BUCKET, out_key, dst)
 
-            public_url = public_minio.presigned_get_object(
-                CONVERTED_BUCKET,
-                out_key,
-                expires=timedelta(days=PRESIGN_EXPIRES_DAYS),
+            public_url = (
+                f"{MINIO_PUBLIC_ENDPOINT.rstrip(
+                    '/')}/{CONVERTED_BUCKET}/{out_key}"
             )
 
             update_job(job_id, status="CONCLUIDO", converted_url=public_url)
@@ -188,7 +187,8 @@ def process_message(ch, method, _properties, body):
             try:
                 internal_minio.remove_object(bucket, key)
             except Exception as e:
-                print(f"[worker] aviso: falha ao remover origem: {e}", flush=True)
+                print(f"[worker] aviso: falha ao remover origem: {
+                      e}", flush=True)
 
             publish_done(
                 {
